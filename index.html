@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flappy Bird Study</title>
+<style>
+/* --- Base layout / look --- */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: linear-gradient(to bottom, #60a5fa, #93c5fd);
+  font-family: "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wrap {
+  width: 480px;
+  max-width: 95vw;
+  background: #f8fafc;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  border: 3px solid #0ea5e9;
+}
+.hud {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 14px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hud strong { color: #0369a1; }
+button {
+  background: #0ea5e9;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-left: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+button:hover { background: #0284c7; }
+canvas {
+  width: 100%;
+  height: 400px;
+  background: linear-gradient(to top, #bae6fd, #e0f2fe);
+  border-radius: 8px;
+  display: block;
+  margin: 4px 0;
+  border: 2px solid #38bdf8;
+}
+select {
+  border: 1px solid #38bdf8;
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #e0f2fe;
+  font-size: 14px;
+}
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #111827;
+  color: #f9fafb;
+  padding: 8px 16px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  font-size: 14px;
+  z-index: 9999;
+}
+.toast.show { opacity: 1; }
+@media (max-width: 520px) {
+  canvas { height: 320px; }
+}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div>Score: <strong id="score">0</strong> • Best: <strong id="best">0</strong></div>
+      <div>
+        <button id="btnStart">Start</button>
+        <button id="btnPause">Pause</button>
+        <button id="btnRestart">Restart</button>
+      </div>
+    </div>
+
+    <canvas id="game"></canvas>
+
+    <div class="hud">
+      <div>
+        Difficulty:
+        <select id="difficulty">
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Normal</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      <!-- Optional: a finish button back to Gorilla if you supply a return URL -->
+      <!-- <button id="btnFinish">Finish & Return</button> -->
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+/* === Config === */
+const pid = new URLSearchParams(location.search).get("pid") || "unknown";
+const scriptURL = "https://script.google.com/macros/s/AKfycbxO0Cf7RYse-LkK8sEDyS_BnWU5cTKC0OYBRoMrVmjwT9FP9vLAoqXXGFWCBE_CJ2pI/exec";
+/* If you have a Gorilla return URL, add it as ?return=... and uncomment finish btn logic below */
+const returnURL = new URLSearchParams(location.search).get("return");
+
+/* === DOM & canvas === */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const scoreEl = document.getElementById("score");
+const bestEl = document.getElementById("best");
+const difficultySel = document.getElementById("difficulty");
+const toast = document.getElementById("toast");
+
+let gravity = 0.35;
+let score = 0, best = 0;
+let state = "ready";
+let pipes = [];
+const bird = { x: 90, y: 200, vy: 0, r: 12 };
+const TAU = Math.PI * 2;
+
+/* === Helpers === */
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 1000);
+}
+
+/* Fit after the canvas is actually laid out (prevents zero-size bug) */
+function fitAndStart() {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 50 || rect.height < 50) {
+    requestAnimationFrame(fitAndStart);
+    return;
+  }
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, rect.width * ratio);
+  canvas.height = Math.max(1, rect.height * ratio);
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  requestAnimationFrame(loop);
+}
+window.addEventListener("resize", fitAndStart);
+window.addEventListener("load", fitAndStart);
+fitAndStart();
+
+/* === Game pieces === */
+function spawnPipe() {
+  const gap = { easy: 160, normal: 130, hard: 110 }[difficultySel.value];
+  const top = 40 + Math.random() * (canvas.height * 0.6 - gap);
+  pipes.push({ x: canvas.width + 60, top, gap, passed: false });
+}
+
+function drawBird() {
+  ctx.fillStyle = "#fbbf24";
+  ctx.beginPath();
+  ctx.arc(bird.x, bird.y, bird.r, 0, TAU);
+  ctx.fill();
+}
+
+function drawPipes() {
+  ctx.fillStyle = "#10b981";
+  for (const p of pipes) {
+    p.x -= { easy: 1.8, normal: 2.2, hard: 2.5 }[difficultySel.value];
+    ctx.fillRect(p.x, 0, 60, p.top);
+    ctx.fillRect(p.x, p.top + p.gap, 60, canvas.height - (p.top + p.gap));
+
+    // Score when pipe fully passed
+    if (!p.passed && p.x + 60 < bird.x) {
+      p.passed = true;
+      score++;
+      scoreEl.textContent = score;
+    }
+  }
+  // Remove off-screen pipes
+  for (let i = pipes.length - 1; i >= 0; i--) {
+    if (pipes[i].x + 60 < -30) pipes.splice(i, 1);
+  }
+}
+
+function collide() {
+  const gY = canvas.height * 0.93;
+  if (bird.y + bird.r > gY || bird.y - bird.r < 0) return true;
+  for (const p of pipes) {
+    if (bird.x + bird.r > p.x && bird.x - bird.r < p.x + 60) {
+      if (bird.y - bird.r < p.top || bird.y + bird.r > p.top + p.gap) return true;
+    }
+  }
+  return false;
+}
+
+function postToSheet(payload) {
+  try {
+    // Fire-and-forget; no CORS preflight needed for simple JSON to Apps Script
+    fetch(scriptURL, { method: "POST", body: JSON.stringify(payload) })
+      .catch(() => {/* ignore network errors in-session */});
+  } catch {}
+}
+
+function endGame(reason) {
+  state = "gameover";
+  best = Math.max(best, score);
+  bestEl.textContent = best;
+  showToast("Game Over!");
+
+  postToSheet({
+    participant_id: pid,
+    score,
+    best,
+    difficulty: difficultySel.value,
+    reason
+  });
+}
+
+/* === Loop === */
+function loop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const gY = canvas.height * 0.93;
+
+  // ground
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  ctx.fillRect(0, gY, canvas.width, 3);
+  ctx.fillStyle = "#1e293b";
+  ctx.fillRect(0, gY + 3, canvas.width, canvas.height - gY);
+
+  if (state === "running") {
+    bird.vy += gravity;
+    bird.y += bird.vy;
+    drawPipes();
+    if (collide()) endGame("collision");
+  } else if (state === "ready") {
+    bird.y = canvas.height / 3 + Math.sin(performance.now() / 300) * 8;
+  }
+
+  drawBird();
+  requestAnimationFrame(loop);
+}
+
+/* === Controls === */
+function flap() {
+  if (state === "ready") { state = "running"; showToast("Go!"); }
+  if (state === "running") bird.vy = -5;
+  if (state === "gameover") {
+    score = 0; pipes = [];
+    bird.y = canvas.height / 3;
+    state = "ready";
+  }
+}
+
+canvas.addEventListener("pointerdown", flap);
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") { e.preventDefault(); flap(); }
+});
+
+document.getElementById("btnStart").onclick = () => {
+  if (state !== "running") { state = "running"; showToast("Go!"); }
+};
+document.getElementById("btnPause").onclick = () => {
+  if (state === "running") { state = "paused"; showToast("Paused"); }
+  else if (state === "paused") { state = "running"; showToast("Resumed"); }
+};
+document.getElementById("btnRestart").onclick = () => {
+  score = 0; pipes = [];
+  bird.y = canvas.height / 3;
+  state = "running"; showToast("Restarted");
+};
+
+// Pipe spawner
+setInterval(() => { if (state === "running") spawnPipe(); }, 1500);
+
+// Optional finish button if you pass ?return=...
+/*
+const btnFinish = document.getElementById("btnFinish");
+if (btnFinish) {
+  btnFinish.style.display = returnURL ? "inline-block" : "none";
+  btnFinish.onclick = () => {
+    location.href = returnURL || "/";
+  };
+}
+*/
+</script>
+</body>
+</html>
